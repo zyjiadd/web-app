@@ -10,9 +10,11 @@ const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 
 // NOTE: cWeb runs the app with a READ-ONLY /app directory, so the xray
-// binary cannot be downloaded/extracted next to server.js. Use the OS temp
-// dir (writable) for the download and the extracted binary instead.
-const XRAY_DIR = os.tmpdir();
+// binary cannot be downloaded/extracted next to server.js. Use the user's
+// home directory (writable AND executable) for the download and the
+// extracted binary. os.tmpdir() (/tmp) is writable but mounted noexec on
+// cWeb, so spawning xray from there fails with EACCES even after chmod +x.
+const XRAY_DIR = os.homedir() || os.tmpdir();
 const XRAY_BIN = path.join(XRAY_DIR, 'xray');
 const XRAY_ZIP = 'Xray-linux-64.zip';
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
@@ -42,7 +44,12 @@ function downloadFile(url, dest) {
 }
 
 async function ensureXray() {
-  if (fs.existsSync(XRAY_BIN)) return;
+  if (fs.existsSync(XRAY_BIN)) {
+    // Binary already present (e.g. from a previous run) — make sure it is
+    // executable, then use it.
+    try { fs.chmodSync(XRAY_BIN, 0o755); } catch (e) { /* ignore */ }
+    return;
+  }
   console.log('[wrapper] xray binary missing, downloading...');
   const zipPath = path.join(XRAY_DIR, XRAY_ZIP);
   await downloadFile(XRAY_URL, zipPath);
