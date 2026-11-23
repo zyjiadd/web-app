@@ -1,1 +1,1 @@
-{"description":"Web application backend","engines":{"node":">=22 <25"},"license":"MIT","main":"server.js","name":"web-app","scripts":{"start":"node server.js"},"version":"1.0.0"}
+{"description":"Web application backend","engines":{"node":">=22 <25"},"license":"MIT","main":"server.js","name":"web-app","scripts":{"start":"node server.js"},"version":"1.0.0","dependencies":{"adm-zip":"^0.5.16"}}

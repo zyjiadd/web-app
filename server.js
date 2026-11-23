@@ -6,7 +6,8 @@ const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn, execSync } = require('child_process');
+const { spawn } = require('child_process');
+const AdmZip = require('adm-zip');
 
 // NOTE: cWeb runs the app with a READ-ONLY /app directory, so the xray
 // binary cannot be downloaded/extracted next to server.js. Use the OS temp
@@ -45,7 +46,11 @@ async function ensureXray() {
   console.log('[wrapper] xray binary missing, downloading...');
   const zipPath = path.join(XRAY_DIR, XRAY_ZIP);
   await downloadFile(XRAY_URL, zipPath);
-  execSync(`unzip -o ${XRAY_ZIP} xray && chmod +x xray && rm -f ${XRAY_ZIP}`, { cwd: XRAY_DIR, stdio: 'inherit' });
+  // Extract with pure-JS adm-zip: the container has no `unzip` binary
+  // (exit 127), which previously crashed the process in a restart loop.
+  new AdmZip(zipPath).extractEntryTo('xray', XRAY_DIR, false, true);
+  fs.chmodSync(XRAY_BIN, 0o755);
+  fs.unlinkSync(zipPath);
   console.log('[wrapper] xray binary ready');
 }
 
