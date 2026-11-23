@@ -4,10 +4,15 @@
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn, execSync } = require('child_process');
 
-const XRAY_BIN = path.join(__dirname, 'xray');
+// NOTE: cWeb runs the app with a READ-ONLY /app directory, so the xray
+// binary cannot be downloaded/extracted next to server.js. Use the OS temp
+// dir (writable) for the download and the extracted binary instead.
+const XRAY_DIR = os.tmpdir();
+const XRAY_BIN = path.join(XRAY_DIR, 'xray');
 const XRAY_ZIP = 'Xray-linux-64.zip';
 const XRAY_URL = 'https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip';
 const XRAY_PORT = 18000;
@@ -38,9 +43,9 @@ function downloadFile(url, dest) {
 async function ensureXray() {
   if (fs.existsSync(XRAY_BIN)) return;
   console.log('[wrapper] xray binary missing, downloading...');
-  const zipPath = path.join(__dirname, XRAY_ZIP);
+  const zipPath = path.join(XRAY_DIR, XRAY_ZIP);
   await downloadFile(XRAY_URL, zipPath);
-  execSync(`unzip -o ${XRAY_ZIP} xray && chmod +x xray && rm -f ${XRAY_ZIP}`, { cwd: __dirname, stdio: 'inherit' });
+  execSync(`unzip -o ${XRAY_ZIP} xray && chmod +x xray && rm -f ${XRAY_ZIP}`, { cwd: XRAY_DIR, stdio: 'inherit' });
   console.log('[wrapper] xray binary ready');
 }
 
