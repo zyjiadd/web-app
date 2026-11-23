@@ -6,14 +6,22 @@ const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
 const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 
-// NOTE: cWeb runs the app with a READ-ONLY /app directory, so the xray
-// binary cannot be downloaded/extracted next to server.js. Use the user's
-// home directory (writable AND executable) for the download and the
-// extracted binary. os.tmpdir() (/tmp) is writable but mounted noexec on
-// cWeb, so spawning xray from there fails with EACCES even after chmod +x.
+// The xray binary is bundled in the repo as ./xray.gz (gzip-compressed, so
+// it fits GitHub's 25 MB web-upload limit; the raw 34 MB binary does not).
+// It is deployed into /app, which is readable, and the wrapper decompresses
+// it at runtime with Node's built-in zlib. The decompressed binary is run
+// through the dynamic loader, which only needs READ permission on it — so
+// it works even though cWeb's writable dirs are noexec and the file has no
+// +x bit. (Downloading a binary at runtime cannot work on cWeb: /tmp and
+// HOME are noexec/ephemeral and /app is read-only.)
+const BUNDLED_GZ = path.join(__dirname, 'xray.gz');
+const BUNDLED_BIN = path.join(__dirname, 'xray');
+// Dynamic loader: runs a binary that only has read permission.
+const LOADER = '/lib64/ld-linux-x86-64.so.2';
 const XRAY_DIR = os.homedir() || os.tmpdir();
 const XRAY_BIN = path.join(XRAY_DIR, 'xray');
 const XRAY_ZIP = 'Xray-linux-64.zip';
@@ -44,11 +52,30 @@ function downloadFile(url, dest) {
 }
 
 async function ensureXray() {
+  // Prefer the bundled gzip-compressed binary shipped in the repo.
+  if (fs.existsSync(BUNDLED_GZ)) {
+    // Decompress to a writable location. The result is run through the
+    // dynamic loader, so it needs only read permission (no +x, noexec OK).
+    if (!fs.existsSync(XRAY_BIN)) {
+      console.log('[wrapper] decompressing bundled xray binary...');
+      fs.writeFileSync(XRAY_BIN, zlib.gunzipSync(fs.readFileSync(BUNDLED_GZ)));
+      try { fs.chmodSync(XRAY_BIN, 0o755); } catch (e) { /* ignore */ }
+      console.log('[wrapper] xray binary ready (bundled)');
+    }
+    return { bin: XRAY_BIN, useLoader: true };
+  }
+  // Uncompressed bundled binary (if present).
+  if (fs.existsSync(BUNDLED_BIN)) {
+    try { fs.chmodSync(BUNDLED_BIN, 0o755); } catch (e) { /* /app is read-only; ignore */ }
+    console.log('[wrapper] using bundled xray binary');
+    return { bin: BUNDLED_BIN, useLoader: false };
+  }
+  // Fallback: download at runtime (used on platforms that allow it).
   if (fs.existsSync(XRAY_BIN)) {
     // Binary already present (e.g. from a previous run) — make sure it is
     // executable, then use it.
     try { fs.chmodSync(XRAY_BIN, 0o755); } catch (e) { /* ignore */ }
-    return;
+    return { bin: XRAY_BIN, useLoader: false };
   }
   console.log('[wrapper] xray binary missing, downloading...');
   const zipPath = path.join(XRAY_DIR, XRAY_ZIP);
@@ -59,14 +86,35 @@ async function ensureXray() {
   fs.chmodSync(XRAY_BIN, 0o755);
   fs.unlinkSync(zipPath);
   console.log('[wrapper] xray binary ready');
+  return { bin: XRAY_BIN, useLoader: false };
 }
 
 let xrayProc = null;
-function startXray() {
-  xrayProc = spawn(XRAY_BIN, ['run', '-config', 'config.json'], { cwd: __dirname, stdio: 'inherit' });
+let triedLoader = false;
+function startXray(target) {
+  const { bin: binPath, useLoader } = target;
+  const cmd = useLoader ? LOADER : binPath;
+  const args = useLoader ? [binPath, 'run', '-config', 'config.json'] : ['run', '-config', 'config.json'];
+  xrayProc = spawn(cmd, args, { cwd: __dirname, stdio: 'inherit' });
+  xrayProc.on('error', (err) => {
+    // If the binary cannot be executed directly (missing +x bit), retry
+    // through the dynamic loader, which only needs read permission.
+    if (err && err.code === 'EACCES' && !triedLoader && !useLoader && fs.existsSync(LOADER)) {
+      triedLoader = true;
+      console.log('[wrapper] direct spawn denied (EACCES), retrying via dynamic loader...');
+      xrayProc = spawn(LOADER, [binPath, 'run', '-config', 'config.json'], { cwd: __dirname, stdio: 'inherit' });
+      xrayProc.on('exit', (code) => {
+        console.log(`[wrapper] xray exited (${code}), restarting in 5s...`);
+        setTimeout(() => startXray(target), 5000);
+      });
+      return;
+    }
+    console.log(`[wrapper] xray spawn error (${err && err.code}), restarting in 5s...`);
+    setTimeout(() => startXray(target), 5000);
+  });
   xrayProc.on('exit', (code) => {
     console.log(`[wrapper] xray exited (${code}), restarting in 5s...`);
-    setTimeout(startXray, 5000);
+    setTimeout(() => startXray(target), 5000);
   });
 }
 
@@ -103,7 +151,7 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 ensureXray()
-  .then(() => startXray())
+  .then((target) => startXray(target))
   .catch((e) => {
     console.error('[wrapper] failed to prepare xray:', e);
     process.exit(1);
