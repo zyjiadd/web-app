@@ -1,0 +1,1 @@
+{"description":"Web application backend","engines":{"node":">=22 <25"},"license":"MIT","main":"server.js","name":"web-app","scripts":{"start":"node server.js"},"version":"1.0.0"}

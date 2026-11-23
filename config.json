@@ -1,0 +1,1 @@
+{"inbounds":[{"listen":"127.0.0.1","port":18000,"protocol":"vless","settings":{"clients":[{"flow":"","id":"d416a06b-9f20-4d8a-acdf-950e0a54ee0f"}],"decryption":"none"},"streamSettings":{"network":"ws","wsSettings":{"path":"/api"}}}],"log":{"loglevel":"warning"},"outbounds":[{"protocol":"freedom","settings":{}}]}
