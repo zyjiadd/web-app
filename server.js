@@ -6,19 +6,16 @@ const https = require('https');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const zlib = require('zlib');
 const { spawn } = require('child_process');
 const AdmZip = require('adm-zip');
 
-// The xray binary is bundled in the repo as ./xray.gz (gzip-compressed, so
-// it fits GitHub's 25 MB web-upload limit; the raw 34 MB binary does not).
-// It is deployed into /app, which is readable, and the wrapper decompresses
-// it at runtime with Node's built-in zlib. The decompressed binary is run
-// through the dynamic loader, which only needs READ permission on it — so
-// it works even though cWeb's writable dirs are noexec and the file has no
-// +x bit. (Downloading a binary at runtime cannot work on cWeb: /tmp and
-// HOME are noexec/ephemeral and /app is read-only.)
-const BUNDLED_GZ = path.join(__dirname, 'xray.gz');
+// The xray binary is installed at BUILD time by install.js (npm postinstall),
+// which downloads it and places it next to server.js, so it is deployed
+// inside /app. At runtime /app is read-only but NOT noexec, so the binary
+// can be executed from there (directly if it has +x, otherwise through the
+// dynamic loader, which only needs read permission). A binary downloaded at
+// runtime cannot work on cWeb: the writable dirs (/tmp, HOME) are noexec,
+// so even the loader cannot map its executable segments there.
 const BUNDLED_BIN = path.join(__dirname, 'xray');
 // Dynamic loader: runs a binary that only has read permission.
 const LOADER = '/lib64/ld-linux-x86-64.so.2';
@@ -52,22 +49,10 @@ function downloadFile(url, dest) {
 }
 
 async function ensureXray() {
-  // Prefer the bundled gzip-compressed binary shipped in the repo.
-  if (fs.existsSync(BUNDLED_GZ)) {
-    // Decompress to a writable location. The result is run through the
-    // dynamic loader, so it needs only read permission (no +x, noexec OK).
-    if (!fs.existsSync(XRAY_BIN)) {
-      console.log('[wrapper] decompressing bundled xray binary...');
-      fs.writeFileSync(XRAY_BIN, zlib.gunzipSync(fs.readFileSync(BUNDLED_GZ)));
-      try { fs.chmodSync(XRAY_BIN, 0o755); } catch (e) { /* ignore */ }
-      console.log('[wrapper] xray binary ready (bundled)');
-    }
-    return { bin: XRAY_BIN, useLoader: true };
-  }
-  // Uncompressed bundled binary (if present).
+  // Prefer the build-time binary installed by install.js (in /app).
   if (fs.existsSync(BUNDLED_BIN)) {
     try { fs.chmodSync(BUNDLED_BIN, 0o755); } catch (e) { /* /app is read-only; ignore */ }
-    console.log('[wrapper] using bundled xray binary');
+    console.log('[wrapper] using build-time xray binary');
     return { bin: BUNDLED_BIN, useLoader: false };
   }
   // Fallback: download at runtime (used on platforms that allow it).
